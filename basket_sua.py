@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from bs4 import BeautifulSoup, Comment
+from beautifulsoup4 import BeautifulSoup, Comment
 from io import StringIO
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
