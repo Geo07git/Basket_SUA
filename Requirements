@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+requests
+bs4
+io
+sklearn.ensemble
+sklearn.metrics
