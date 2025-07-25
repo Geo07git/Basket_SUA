@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup, Comment
 from io import StringIO
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import os
 import json
@@ -49,6 +50,97 @@ def predict_next_game(df):
             rmses[c] = 0.0
 
     return preds, rmses
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from io import StringIO
+import streamlit as st
+
+# 🎯 Funcție pentru a încărca datele NBA/WNBA pentru tot sezonul
+@st.cache_data
+def load_games(league, season):
+    months = ["october", "november", "december", "january", "february", "march", "april"]
+    all_games = []
+    
+    if league == "nba":
+        # URL-ul de bază pentru scraping NBA
+        base_url = f"https://www.basketball-reference.com/leagues/NBA_{season}_games-{{}}.html"
+        
+        for month in months:
+            url = base_url.format(month)
+            try:
+                # Se trimite o cerere HTTP GET
+                r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+                soup = BeautifulSoup(r.text, 'html.parser')
+                # Găsește tabelul cu datele meciurilor
+                table = soup.find("table", {"id": "schedule"})
+                
+                if table:
+                    # Extrage datele în DataFrame
+                    df = pd.read_html(StringIO(str(table)))[0]
+                    df["Month"] = month  # Adăugăm luna pentru fiecare tabel
+                    all_games.append(df)
+            except Exception as e:
+                st.error(f"⚠️ Nu s-au putut încărca datele pentru luna {month}. Detaliu: {e}")
+        
+        if all_games:
+            # Combină toate lunile într-un singur DataFrame
+            games_df = pd.concat(all_games, ignore_index=True)
+            games_df = games_df.dropna(subset=["PTS", "PTS.1"])
+            games_df = games_df.rename(columns={
+                "Visitor/Neutral": "Away",
+                "Home/Neutral": "Home",
+                "PTS": "Away_PTS",
+                "PTS.1": "Home_PTS"
+            })
+            games_df["Away_PTS"] = pd.to_numeric(games_df["Away_PTS"], errors='coerce')
+            games_df["Home_PTS"] = pd.to_numeric(games_df["Home_PTS"], errors='coerce')
+            games_df = games_df.dropna(subset=["Away_PTS", "Home_PTS"])
+            return games_df
+        else:
+            return pd.DataFrame()
+    
+    elif league == "wnba":
+        # URL-ul de bază pentru scraping WNBA
+        url = f"https://www.basketball-reference.com/wnba/years/{season}_games.html"
+
+        try:
+            all_tables = pd.read_html(url)
+            df = all_tables[0]
+            df = df.dropna(subset=["PTS", "PTS.1"])
+            df = df.rename(columns={
+                "Visitor/Neutral": "Away",
+                "Home/Neutral": "Home",
+                "PTS": "Away_PTS",
+                "PTS.1": "Home_PTS"
+            })
+            df["Away_PTS"] = pd.to_numeric(df["Away_PTS"], errors='coerce')
+            df["Home_PTS"] = pd.to_numeric(df["Home_PTS"], errors='coerce')
+            df = df.dropna(subset=["Away_PTS", "Home_PTS"])
+            return df
+        except Exception as e:
+            st.error("⚠️ Nu s-au putut încărca datele")
+            return pd.DataFrame()
+    
+    else:
+        raise ValueError("League not recognized")
+
+# Funcția pentru normalizarea datelor echipelor
+def normalize_team_games(df):
+    # Normalizarea echipelor ca "Home" și "Away"
+    away_df = df[["Date", "Away", "Away_PTS", "Home", "Home_PTS"]].copy()
+    away_df.columns = ["Date", "Team", "PTS", "Opponent", "Opponent_PTS"]
+    away_df["Home"] = False  # Marcare pentru echipa de pe terenul oponentului
+
+    home_df = df[["Date", "Home", "Home_PTS", "Away", "Away_PTS"]].copy()
+    home_df.columns = ["Date", "Team", "PTS", "Opponent", "Opponent_PTS"]
+    home_df["Home"] = True  # Marcare pentru echipa care joacă acasă
+
+    # Combină ambele DataFrame-uri într-unul singur
+    full_df = pd.concat([away_df, home_df], ignore_index=True)
+    full_df["Point_Diff"] = full_df["PTS"] - full_df["Opponent_PTS"]
+    return full_df
 
 # 📊 Scrape date din BBR (inclusiv comentarii pentru NBA)
 def scrape_stats(url, league, debug=False):
@@ -149,7 +241,6 @@ def analyze_trend_consistency(df, method="ultimele", n=5):
 
     return pd.DataFrame(results).T
 
-
 # Funcție pentru a calcula scorul final ajustat pe baza trendului și consistenței
 def calculate_final_adjusted_score(pred, trend, std, cv):
     # Fără penalizări, doar un mic bonus/malus în funcție de trend
@@ -176,9 +267,60 @@ def generate_final_prediction_text(player_name, preds_adjusted):
     """
     return prediction_text
 
-# 🌐 Interfață Streamlit
-st.set_page_config(page_title="NBA/WNBA Player Predictions", layout="centered")
-st.title("🏀 NBA/WNBA Player Predictions")
+# 🔢 Normalizează meciurile: fiecare rând = echipă + scor + adversar + acasă/deplasare
+def normalize_team_games(df):
+    away_df = df[["Date", "Away", "Away_PTS", "Home", "Home_PTS"]].copy()
+    away_df.columns = ["Date", "Team", "PTS", "Opponent", "Opponent_PTS"]
+    away_df["Home"] = False
+
+    home_df = df[["Date", "Home", "Home_PTS", "Away", "Away_PTS"]].copy()
+    home_df.columns = ["Date", "Team", "PTS", "Opponent", "Opponent_PTS"]
+    home_df["Home"] = True
+
+    full_df = pd.concat([away_df, home_df], ignore_index=True)
+    full_df["Point_Diff"] = full_df["PTS"] - full_df["Opponent_PTS"]
+    return full_df
+
+# 🧠 Predicție diferență de puncte
+def predict_margin(df, team1, team2):
+    df_filtered = df[(df["Team"] == team1) | (df["Team"] == team2)].copy()
+    df_filtered["Is_Team1"] = df_filtered["Team"] == team1
+
+    X = pd.get_dummies(df_filtered[["Is_Team1", "Home"]], drop_first=True)
+    y = df_filtered["Point_Diff"]
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Predicție pentru meci pe teren neutru
+    if location == "Echipa 1 acasă":
+        input_data = pd.DataFrame([[1, 1]], columns=["Is_Team1", "Home"])
+    elif location == "Teren neutru":
+        input_data = pd.DataFrame([[1, 0]], columns=["Is_Team1", "Home"])
+    else:  # Echipa 2 acasă
+        input_data = pd.DataFrame([[0, 1]], columns=["Is_Team1", "Home"])
+    pred = model.predict(input_data)
+    return pred
+
+# 🎯 Predicție total puncte în meci
+def predict_total_points(df, team1, team2):
+    df_matchups = df[((df["Team"] == team1) & (df["Opponent"] == team2)) |
+                     ((df["Team"] == team2) & (df["Opponent"] == team1))]
+
+    if len(df_matchups) >= 3:
+        # Folosim media din meciurile directe dacă sunt suficiente
+        avg_total = df_matchups["PTS"] + df_matchups["Opponent_PTS"]
+        return avg_total.mean()
+    else:
+        # Altfel, folosim media punctelor din meciurile generale ale echipelor
+        avg_team1 = df[df["Team"] == team1]["PTS"].mean()
+        avg_team2 = df[df["Team"] == team2]["PTS"].mean()
+        return avg_team1 + avg_team2
+
+
+# 🚀 Interfață Streamlit
+st.set_page_config(page_title="Predicții NBA/WNBA", layout="centered")
+st.title("🏀 Predicții scor si jucatori NBA/WNBA")
 
 # 📌 Selectori pe 2 coloane: Liga și Trend method
 col1, col2 = st.columns(2)
@@ -187,22 +329,79 @@ with col1:
 with col2:
     trend_method = st.selectbox("📅 Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
 
-#league = st.selectbox("Select league:", ["NBA", "WNBA"]).lower()
-##league = st.radio("Alege liga:", ["NBA", "WNBA"], key="league").lower()
-#trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
-##trend_method = st.radio("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
+# Selecție echipe pentru predicția meciului
+if league == "nba":
+    games_df = load_games(league, 2025)  # Exemplu de sezon pentru NBA
+else:
+    games_df = load_games(league, 2025)  # Exemplu de sezon pentru WNBA
+
+# Selecție echipe și locație pentru meciuri
+if not games_df.empty:
+    # Asigură-te că folosești DataFrame-ul corect după normalizare
+    normalized_df = normalize_team_games(games_df)
+    teams = sorted(normalized_df["Team"].unique())
+
+    # 🏀 Selectare echipe - 2 coloane
+    col3, col4 = st.columns(2)
+    with col3:
+        team1 = st.selectbox("🏠 Echipa gazdă", teams)
+    with col4:
+        team2 = st.selectbox("🚗 Echipa oaspete", teams)
+
+    # 🏟️ Selectare locație - 3 coloane
+    st.markdown("### 🏟️ Locația meciului")
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        loc1 = st.button("Echipa 1 acasă")
+    with col6:
+        loc2 = st.button("Echipa 2 acasă")
+    with col7:
+        loc3 = st.button("Teren neutru")
+
+    # Determinăm locația pe baza butonului apăsat
+    location = None
+    if loc1:
+        location = "Echipa 1 acasă"
+    elif loc2:
+        location = "Echipa 2 acasă"
+    elif loc3:
+        location = "Teren neutru"
+
+    # 🔮 Predicții meci
+    if team1 != team2:
+        margin = predict_margin(normalized_df, team1, team2)
+        total_points = predict_total_points(normalized_df, team1, team2)
+        winner = team1 if margin > 0 else team2
+
+        margin_val = margin[0]
+        team1_points = (total_points + margin_val) / 2
+        team2_points = (total_points - margin_val) / 2
+
+        # 🔚 Rezumat final
+        st.subheader("✅ Rezumat predicție meci")
+        prediction_summary_html = f"""
+        <div style='font-size:20px; background-color:#111; padding:20px; border-radius:10px; color:white; line-height:1.6'>
+            🔮 <b><span style='color:#00FFAA'>{winner}</span></b> câștigă la o diferență de <b>{abs(margin_val):.0f}</b> puncte.<br>
+            📊 <b>Scor estimat:</b> <span style='color:#FFD700'>{team1} {team1_points:.0f}</span> – <span style='color:#FFD700'>{team2_points:.0f} {team2}</span><br>
+            🔢 <b>Total puncte:</b> {total_points:.1f}<br>
+            🏟️ <b>Locație:</b> {location}
+        </div>
+        """
+        st.markdown(prediction_summary_html, unsafe_allow_html=True)
+
+# 🏀 Selecție jucător pentru predicții individuale
 players = nba_players if league == "nba" else wnba_players
-player_name = st.selectbox("Select player:", list(players.keys()))
+player_name = st.selectbox("Selectează jucătorul:", list(players.keys()))
 
-
+# Preluare și predicție pentru jucător
 if player_name:
     pid = players[player_name]
     df_all = pd.concat([scrape_stats(generate_url(pid, league, y), league) for y in [2024, 2025]], ignore_index=True)
 
     if df_all.empty:
-        st.error("⚠️ No valid data found.")
+        st.error("⚠️ Nu s-au găsit date valide.")
     else:
-        # 🔍 Calculam trend_df ÎNAINTE de predicțiile ajustate
+        # Calculează și afisează predicțiile pentru jucător
         if trend_method == "Ultimele N meciuri":
             n_last = st.slider("Număr de meciuri recente:", min_value=3, max_value=min(20, len(df_all)), value=5)
             trend_df = analyze_trend_consistency(df_all, method="ultimele", n=n_last)
@@ -211,19 +410,7 @@ if player_name:
 
         preds, rmses = predict_next_game(df_all)
 
-        # 🧮 Final prediction interval
-        final_preds = {}
-        for key in preds:
-            try:
-                pred = float(preds[key])
-                rmse = float(rmses[key])
-                lower = round(pred - rmse, 1)
-                upper = round(pred + rmse, 1)
-                final_preds[key] = f"{lower} – {upper}"
-            except:
-                final_preds[key] = "–"
-
-        # 🎯 Calculează predicțiile ajustate cu trend_df
+        # Calculăm predicțiile ajustate
         final_preds_adjusted = {}
         for key in preds:
             try:
@@ -236,56 +423,14 @@ if player_name:
                 adjusted_pred = calculate_final_adjusted_score(pred, trend, std, cv)
                 final_preds_adjusted[key] = adjusted_pred
             except:
-                final_preds_adjusted[key] = 0  # în loc de "–", pentru textul final
+                final_preds_adjusted[key] = 0
 
-        # ✨ Textul final cu predicția
+        # Generăm textul final cu predicția
         prediction_text = generate_final_prediction_text(player_name, final_preds_adjusted)
 
-        # ✅ Afișăm și tabelul de predicție brută
-        st.subheader("✅ Final prediction (interval)")
-        st.table(pd.DataFrame([final_preds]))
-
-        # 🔝 Afișează textul cu font mare, PRIMA IEȘIRE DUPĂ SELECTARE
-        st.subheader("✅ Rezumat predictie")
+        # Afișăm predicțiile
+        st.subheader("✅ Rezumat predicție")
         st.markdown(
             f"<div style='font-size:17px; font-weight:bold; color:#00FFAA; background-color:black; padding:20px; border-radius:10px'>{prediction_text}</div>",
             unsafe_allow_html=True
-        )
-
-        st.subheader("📊 Recent statistics")
-        st.dataframe(df_all.tail(5), use_container_width=True)
-
-        # 📉 Afișăm analiza trendului (colorată)
-        st.subheader("📉 Analiză trend și consistență")
-
-        def color_score(val):
-            try:
-                val = float(val)
-                color = "limegreen" if val >= 7 else "gold" if val >= 4 else "tomato"
-                return f"color: {color}; background-color: black; font-weight: bold;"
-            except:
-                return ""
-
-        def color_cv(val):
-            try:
-                val = float(str(val).replace('%', ''))
-                color = "limegreen" if val < 20 else "gold" if val < 40 else "tomato"
-                return f"color: {color}; background-color: black; font-weight: bold;"
-            except:
-                return ""
-
-        def color_std(val):
-            try:
-                val = float(val)
-                color = "limegreen" if val < 2 else "gold" if val < 4 else "tomato"
-                return f"color: {color}; background-color: black; font-weight: bold;"
-            except:
-                return ""
-
-        st.dataframe(
-            trend_df.style
-                .map(color_score, subset=["Scor Consistență (0–10)"])
-                .map(color_cv, subset=["CV (% variabilitate)"])
-                .map(color_std, subset=["STD (deviație)"])
-                .format(precision=2, subset=["Scor Consistență (0–10)"])
         )
