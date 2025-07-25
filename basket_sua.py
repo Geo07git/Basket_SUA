@@ -158,31 +158,39 @@ def calculate_final_adjusted_score(pred, trend, std, cv):
     return round(adjusted_pred, 1)
 
 # Funcție pentru a genera textul cu predicțiile finale ajustate
-def generate_final_prediction_text(player_name, preds_adjusted): 
+def generate_final_prediction_text(player_name, preds_adjusted):
     def fmt(val):
         return "0" if val in [None, np.nan, "nan", "-", "–"] or str(val).lower() == "nan" else str(val)
 
-    name_html = f"<span style='color:#FF5733; text-transform:uppercase; font-weight:bold'>{player_name}</span>"
+    player_name_upper = f"<span style='color:#FF5733; text-transform:uppercase; font-weight:bold'>{player_name}</span>"
 
-    text = (
-        f"Jucătorul {name_html} va juca aproximativ {fmt(preds_adjusted.get('MIN'))} minute, "
-        f"va înscrie {fmt(preds_adjusted.get('PTS'))} puncte, "
-        f"va avea {fmt(preds_adjusted.get('TRB'))} recuperări, "
-        f"și {fmt(preds_adjusted.get('AST'))} pase. "
-        f"De asemenea, va realiza {fmt(preds_adjusted.get('3P'))} aruncări de 3 puncte, "
-        f"{fmt(preds_adjusted.get('FG'))} aruncări de la distanță și "
-        f"{fmt(preds_adjusted.get('FT'))} aruncări libere reușite "
-        f"și va comite {fmt(preds_adjusted.get('PF'))} greșeli personale."
-    )
-    return text
+    prediction_text = f"""
+    <span style='color:#00FFAA; font-weight:bold; font-size:20px'>🏀 {player_name_upper}</span><br>
+    ⏱️ va juca aproximativ <b>{fmt(preds_adjusted.get('MIN'))}</b> minute,<br>
+    🎯 va înscrie <b>{fmt(preds_adjusted.get('PTS'))}</b> puncte,<br>
+    🛡️ va avea <b>{fmt(preds_adjusted.get('TRB'))}</b> recuperări,<br>
+    🎯 va pasa de <b>{fmt(preds_adjusted.get('AST'))}</b> ori.<br>
+    💥 Aruncări de 3 puncte: <b>{fmt(preds_adjusted.get('3P'))}</b><br>
+    🎯 Aruncări de la distanță: <b>{fmt(preds_adjusted.get('FG'))}</b><br>
+    ⚠️ Faulturi estimate: <b>{fmt(preds_adjusted.get('PF'))}</b>
+    """
+    return prediction_text
 
 # 🌐 Interfață Streamlit
 st.set_page_config(page_title="NBA/WNBA Player Predictions", layout="centered")
 st.title("🏀 NBA/WNBA Player Predictions")
-league = st.selectbox("Select league:", ["NBA", "WNBA"]).lower()
-#league = st.radio("Alege liga:", ["NBA", "WNBA"], key="league").lower()
-trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
-#trend_method = st.radio("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
+
+# 📌 Selectori pe 2 coloane: Liga și Trend method
+col1, col2 = st.columns(2)
+with col1:
+    league = st.selectbox("📂 Alege liga:", ["NBA", "WNBA"], key="league").lower()
+with col2:
+    trend_method = st.selectbox("📅 Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
+
+#league = st.selectbox("Select league:", ["NBA", "WNBA"]).lower()
+##league = st.radio("Alege liga:", ["NBA", "WNBA"], key="league").lower()
+#trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
+##trend_method = st.radio("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
 players = nba_players if league == "nba" else wnba_players
 player_name = st.selectbox("Select player:", list(players.keys()))
 
@@ -240,7 +248,7 @@ if player_name:
         # 🔝 Afișează textul cu font mare, PRIMA IEȘIRE DUPĂ SELECTARE
         st.subheader("✅ Rezumat predictie")
         st.markdown(
-            f"<div style='font-size:24px; font-weight:bold; color:#00FFAA; background-color:black; padding:20px; border-radius:10px'>{prediction_text}</div>",
+            f"<div style='font-size:17px; font-weight:bold; color:#00FFAA; background-color:black; padding:20px; border-radius:10px'>{prediction_text}</div>",
             unsafe_allow_html=True
         )
 
