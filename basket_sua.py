@@ -181,7 +181,7 @@ st.set_page_config(page_title="NBA/WNBA Player Predictions", layout="centered")
 st.title("🏀 NBA/WNBA Player Predictions")
 league = st.selectbox("Select league:", ["NBA", "WNBA"]).lower()
 #league = st.radio("Alege liga:", ["NBA", "WNBA"], key="league").lower()
-trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
+trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Trend ponderat recent", "Ultimele N meciuri"])
 #trend_method = st.radio("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
 players = nba_players if league == "nba" else wnba_players
 player_name = st.selectbox("Select player:", list(players.keys()))
