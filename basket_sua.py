@@ -9,30 +9,45 @@ from sklearn.metrics import mean_squared_error
 import os
 import json
 
-
 # 🎯 Convertire minute MM:SS → float
 def convert_minutes(mp):
     try:
         m, s = map(int, mp.split(":"))
-        return round(m + s/60, 2)
+        return round(m + s / 60, 2)
     except:
         return np.nan
 
-# 🧠 Predicție + RMSE pentru fiecare coloană
+# 🧠 Predicție + RMSE pentru fiecare coloană (folosind RandomForest)
 def predict_next_game(df):
     if len(df) < 3:
         return {c: "Insuficiente date" for c in df.columns}, None
+
+    df = df.fillna(0)
     X = np.arange(len(df)).reshape(-1, 1)
+
     preds = {}
     rmses = {}
+
     for c in df.columns:
-        model = RandomForestRegressor(random_state=0)
-        model.fit(X, df[c])
-        y_pred = model.predict(X)
-        rmse = np.sqrt(mean_squared_error(df[c], y_pred))
-        prediction = model.predict([[len(df)]])[0]
-        preds[c] = f"{prediction:.1f}"
-        rmses[c] = f"{rmse:.1f}"
+        try:
+            y = df[c].astype(float).values
+            if np.all(y == 0):  # Ignoră complet coloanele fără date semnificative
+                preds[c] = 0.0
+                rmses[c] = 0.0
+                continue
+
+            model = RandomForestRegressor(random_state=0)
+            model.fit(X, y)
+            y_pred = model.predict(X)
+            rmse = np.sqrt(mean_squared_error(y, y_pred))
+            prediction = model.predict([[len(df)]])[0]
+
+            preds[c] = round(float(prediction), 1) if not np.isnan(prediction) else 0.0
+            rmses[c] = round(float(rmse), 1) if not np.isnan(rmse) else 0.0
+        except Exception as e:
+            preds[c] = 0.0
+            rmses[c] = 0.0
+
     return preds, rmses
 
 # 📊 Scrape date din BBR (inclusiv comentarii pentru NBA)
@@ -40,9 +55,9 @@ def scrape_stats(url, league, debug=False):
     headers = {'User-Agent': 'Mozilla/5.0'}
     r = requests.get(url, headers=headers)
     soup = BeautifulSoup(r.text, 'html.parser')
-    
+
     table_id = "wnba_pgl_basic" if league == "wnba" else "player_game_log_reg"
-    
+
     if league == "nba":
         comments = soup.find_all(string=lambda text: isinstance(text, Comment))
         for c in comments:
@@ -51,7 +66,7 @@ def scrape_stats(url, league, debug=False):
                 break
 
     tbl = soup.find("table", {"id": table_id})
-    
+
     if debug:
         st.write(f"🔍 URL folosit: {url}")
         st.write(f"⚠️ Tabelul {'găsit ✅' if tbl else 'NU a fost găsit ❌'}")
@@ -64,10 +79,10 @@ def scrape_stats(url, league, debug=False):
     df = df[df["Rk"] != "Rk"].reset_index(drop=True)
     df["MIN"] = df["MP"].astype(str).apply(convert_minutes)
 
-    for col in ["PTS", "TRB", "AST", "PF"]:
+    for col in ["PTS", "TRB", "AST", "PF", "3P", "FG", "FT"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    return df[["MIN", "PTS", "TRB", "AST", "PF"]].dropna()
+    return df[["MIN", "PTS", "TRB", "AST", "PF", "3P", "FG", "FT"]].dropna()
 
 # 🔗 Generează URL-ul corect
 def generate_url(pid, league, season):
@@ -85,35 +100,107 @@ def load_players_from_file(filename):
 nba_players = load_players_from_file("nba_active_players.json")
 wnba_players = load_players_from_file("wnba_active_players.json")
 
+# 📈 Analiza trend și consistență pentru fiecare coloană
+def analyze_trend_consistency(df, method="ultimele", n=5):
+    results = {}
+    if method == "ultimele":
+        df = df.tail(n)
+        X = np.arange(len(df)).reshape(-1, 1)
+        weights = None
+    elif method == "ponderat":
+        X = np.arange(len(df)).reshape(-1, 1)
+        weights = np.exp(np.linspace(-1, 0, len(df)))
+
+    std_all = {}
+
+    for col in df.columns:
+        y = df[col].values
+        slope = 0
+        try:
+            if method == "ponderat":
+                model = np.polyfit(X.flatten(), y, 1, w=weights)
+            else:
+                model = np.polyfit(X.flatten(), y, 1)
+            slope = model[0]
+        except:
+            pass
+
+        trend = "↗️ Crescător" if slope > 0.1 else "↘️ Descrescător" if slope < -0.1 else "➡️ Stabil"
+        std_val = np.std(y)
+        mean_val = np.mean(y)
+        cv_val = (std_val / mean_val * 100) if mean_val != 0 else np.nan
+
+        std_all[col] = std_val
+
+        results[col] = {
+            "Trend": trend,
+            "STD (deviație)": std_val,
+            "CV (% variabilitate)": cv_val
+        }
+
+    max_std = max(std_all.values()) if std_all else 1
+    for col in results:
+        std_val = std_all[col]
+        score = 10 * (1 - (std_val / max_std)) if max_std != 0 else 10
+        results[col]["Scor Consistență (0–10)"] = score
+
+        results[col]["STD (deviație)"] = f"{results[col]['STD (deviație)']:.2f}"
+        results[col]["CV (% variabilitate)"] = f"{results[col]['CV (% variabilitate)']:.2f}%"
+
+    return pd.DataFrame(results).T
+
+
+# Funcție pentru a calcula scorul final ajustat pe baza trendului și consistenței
+def calculate_final_adjusted_score(pred, trend, std, cv):
+    # Fără penalizări, doar un mic bonus/malus în funcție de trend
+    trend_factor = 1.1 if trend == "↗️ Crescător" else 0.95 if trend == "↘️ Descrescător" else 1.0
+    adjusted_pred = pred * trend_factor
+    return round(adjusted_pred, 1)
+
+# Funcție pentru a genera textul cu predicțiile finale ajustate
+def generate_final_prediction_text(player_name, preds_adjusted):
+    def fmt(val):
+        return "0" if val in [None, np.nan, "nan", "-", "–"] or str(val).lower() == "nan" else str(val)
+
+    text = (
+        f"Jucătorul {player_name} va juca aproximativ {fmt(preds_adjusted.get('MIN'))} minute, "
+        f"va înscrie {fmt(preds_adjusted.get('PTS'))} puncte, "
+        f"va avea {fmt(preds_adjusted.get('TRB'))} recuperări, "
+        f"și {fmt(preds_adjusted.get('AST'))} pase. "
+        f"De asemenea, va realiza {fmt(preds_adjusted.get('3P'))} aruncări de 3 puncte, "
+        f"{fmt(preds_adjusted.get('FG'))} aruncări de la distanță și "
+        f"{fmt(preds_adjusted.get('FT'))} aruncări libere reușite "
+        f"și va comite {fmt(preds_adjusted.get('PF'))} greseli personale."
+    )
+    return text
 
 # 🌐 Interfață Streamlit
-st.set_page_config(page_title=" NBA/WNBA Predictions ", layout="centered")
-st.title("🏀 NBA/WNBA Predictions")
+st.set_page_config(page_title="NBA/WNBA Player Predictions", layout="centered")
+st.title("🏀 NBA/WNBA Player Predictions")
 league = st.selectbox("Select league:", ["NBA", "WNBA"]).lower()
+#league = st.radio("Alege liga:", ["NBA", "WNBA"], key="league").lower()
+trend_method = st.selectbox("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
+#trend_method = st.radio("Alege metoda de analiză a trendului:", ["Ultimele N meciuri", "Trend ponderat recent"])
 players = nba_players if league == "nba" else wnba_players
 player_name = st.selectbox("Select player:", list(players.keys()))
-#debug = st.checkbox("🔎 Debug mode")
+
 
 if player_name:
     pid = players[player_name]
-    df_all = pd.concat([
-        scrape_stats(generate_url(pid, league, y), league)#, debug)
-        for y in [2024, 2025]
-    ], ignore_index=True)
+    df_all = pd.concat([scrape_stats(generate_url(pid, league, y), league) for y in [2024, 2025]], ignore_index=True)
 
     if df_all.empty:
         st.error("⚠️ No valid data found.")
     else:
-        st.subheader("📊 Recent statistics")
-        st.dataframe(df_all.tail(5), use_container_width=True)
+        # 🔍 Calculam trend_df ÎNAINTE de predicțiile ajustate
+        if trend_method == "Ultimele N meciuri":
+            n_last = st.slider("Număr de meciuri recente:", min_value=3, max_value=min(20, len(df_all)), value=5)
+            trend_df = analyze_trend_consistency(df_all, method="ultimele", n=n_last)
+        else:
+            trend_df = analyze_trend_consistency(df_all, method="ponderat")
 
         preds, rmses = predict_next_game(df_all)
 
-        st.subheader("🔮 Predict next match")
-        st.table(pd.DataFrame([preds]))
-
-        st.subheader("📉 RMSE (eroare model pe date istorice)")
-        st.table(pd.DataFrame([rmses]))
         # 🧮 Final prediction interval
         final_preds = {}
         for key in preds:
@@ -126,5 +213,69 @@ if player_name:
             except:
                 final_preds[key] = "–"
 
+        # 🎯 Calculează predicțiile ajustate cu trend_df
+        final_preds_adjusted = {}
+        for key in preds:
+            try:
+                pred = float(preds[key])
+                rmse = float(rmses[key])
+                trend = trend_df.loc[key, 'Trend']
+                std = float(trend_df.loc[key, 'STD (deviație)'])
+                cv = float(trend_df.loc[key, 'CV (% variabilitate)'].replace('%', ''))
+
+                adjusted_pred = calculate_final_adjusted_score(pred, trend, std, cv)
+                final_preds_adjusted[key] = adjusted_pred
+            except:
+                final_preds_adjusted[key] = 0  # în loc de "–", pentru textul final
+
+        # ✨ Textul final cu predicția
+        prediction_text = generate_final_prediction_text(player_name, final_preds_adjusted)
+
+        # ✅ Afișăm și tabelul de predicție brută
         st.subheader("✅ Final prediction (interval)")
         st.table(pd.DataFrame([final_preds]))
+
+        # 🔝 Afișează textul cu font mare, PRIMA IEȘIRE DUPĂ SELECTARE
+        st.subheader("✅ Rezumat predictie")
+        st.markdown(
+            f"<div style='font-size:24px; font-weight:bold; color:#00FFAA; background-color:black; padding:20px; border-radius:10px'>{prediction_text}</div>",
+            unsafe_allow_html=True
+        )
+
+        st.subheader("📊 Recent statistics")
+        st.dataframe(df_all.tail(5), use_container_width=True)
+
+        # 📉 Afișăm analiza trendului (colorată)
+        st.subheader("📉 Analiză trend și consistență")
+
+        def color_score(val):
+            try:
+                val = float(val)
+                color = "limegreen" if val >= 7 else "gold" if val >= 4 else "tomato"
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        def color_cv(val):
+            try:
+                val = float(str(val).replace('%', ''))
+                color = "limegreen" if val < 20 else "gold" if val < 40 else "tomato"
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        def color_std(val):
+            try:
+                val = float(val)
+                color = "limegreen" if val < 2 else "gold" if val < 4 else "tomato"
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        st.dataframe(
+            trend_df.style
+                .map(color_score, subset=["Scor Consistență (0–10)"])
+                .map(color_cv, subset=["CV (% variabilitate)"])
+                .map(color_std, subset=["STD (deviație)"])
+                .format(precision=2, subset=["Scor Consistență (0–10)"])
+        )
