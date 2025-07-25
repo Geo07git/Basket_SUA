@@ -158,19 +158,21 @@ def calculate_final_adjusted_score(pred, trend, std, cv):
     return round(adjusted_pred, 1)
 
 # Funcție pentru a genera textul cu predicțiile finale ajustate
-def generate_final_prediction_text(player_name, preds_adjusted):
+def generate_final_prediction_text(player_name, preds_adjusted): 
     def fmt(val):
         return "0" if val in [None, np.nan, "nan", "-", "–"] or str(val).lower() == "nan" else str(val)
 
+    name_html = f"<span style='color:#FF5733; text-transform:uppercase; font-weight:bold'>{player_name}</span>"
+
     text = (
-        f"Jucătorul {player_name} va juca aproximativ {fmt(preds_adjusted.get('MIN'))} minute, "
+        f"Jucătorul {name_html} va juca aproximativ {fmt(preds_adjusted.get('MIN'))} minute, "
         f"va înscrie {fmt(preds_adjusted.get('PTS'))} puncte, "
         f"va avea {fmt(preds_adjusted.get('TRB'))} recuperări, "
         f"și {fmt(preds_adjusted.get('AST'))} pase. "
         f"De asemenea, va realiza {fmt(preds_adjusted.get('3P'))} aruncări de 3 puncte, "
         f"{fmt(preds_adjusted.get('FG'))} aruncări de la distanță și "
         f"{fmt(preds_adjusted.get('FT'))} aruncări libere reușite "
-        f"și va comite {fmt(preds_adjusted.get('PF'))} greseli personale."
+        f"și va comite {fmt(preds_adjusted.get('PF'))} greșeli personale."
     )
     return text
 
