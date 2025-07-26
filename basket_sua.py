@@ -434,3 +434,45 @@ if player_name:
             f"<div style='font-size:17px; font-weight:bold; color:#00FFAA; background-color:black; padding:20px; border-radius:10px'>{prediction_text}</div>",
             unsafe_allow_html=True
         )
+
+        st.subheader("🧱 Date folosite la predictii")
+
+                # Optional: afișare date brute
+        with st.expander("🔍 Vezi datele meciurilor analizate"):
+            st.dataframe(normalized_df[(normalized_df["Team"] == team1) | (normalized_df["Team"] == team2)].sort_values("Date", ascending=False))
+
+        with st.expander("📊 Recent statistics"):
+            st.dataframe(df_all.tail(5), use_container_width=True)\
+        
+        def color_score(val):
+            try:
+                val = float(val)
+                color = "limegreen" if val >= 7 else "gold" if val >= 4 else "tomato"
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        def color_cv(val):
+            try:
+                val = float(str(val).replace('%',''))
+                color = "limegreen" if val < 20 else "gold" if val < 40 else "tomato"
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        def color_std(val):
+            try:
+                val = float(val)
+                color = "limegreen" if val < 2 else "gold" if val < 4 else "tomato"    
+                return f"color: {color}; background-color: black; font-weight: bold;"
+            except:
+                return ""
+
+        with st.expander("🔍 Vezi datele trendului jucatorului"):
+            st.dataframe(
+            trend_df.style
+                .map(color_score, subset=["Scor Consistență (0–10)"])
+                .map(color_cv, subset=["CV (% variabilitate)"])
+                .map(color_std, subset=["STD (deviație)"])
+                .format(precision=2, subset=["Scor Consistență (0–10)"])
+        )
